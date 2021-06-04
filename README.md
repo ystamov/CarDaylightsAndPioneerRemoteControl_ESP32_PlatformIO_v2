@@ -1,0 +1,2 @@
+# CarDaylightsAndPioneerRemoteControl_ESP32_PlatformIO_v2
+ESP32 variant
