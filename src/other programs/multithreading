@@ -1,0 +1,72 @@
+// #include <Arduino.h>
+// //#include <FreeRTOS.h>
+
+// void Core0TaskCode (void * pvParameters);
+// void Core1TaskCode (void * pvParameters);
+// TaskHandle_t Core0Task;
+// TaskHandle_t Core1Task;
+
+// // LED pins
+// const int led1 = 18;
+// const int led2 = 19;
+
+// void setup() {
+//   Serial.begin(9600); 
+//   pinMode(led1, OUTPUT);
+//   pinMode(led2, OUTPUT);
+
+//   //create a task that will be executed in the Core0TaskCode() function, with priority 1 and executed on core 0
+//   xTaskCreatePinnedToCore(
+//                     Core0TaskCode,   /* Task function. */
+//                     "Core0Task",     /* name of task. */
+//                     10000,       /* Stack size of task */
+//                     NULL,        /* parameter of the task */
+//                     1,           /* priority of the task */
+//                     &Core0Task,      /* Task handle to keep track of created task */
+//                     0);          /* pin task to core 0 */                  
+//   delay(500); 
+
+//   //create a task that will be executed in the Core1TaskCode() function, with priority 1 and executed on core 1
+//   xTaskCreatePinnedToCore(
+//                     Core1TaskCode,   /* Task function. */
+//                     "Core1Task",     /* name of task. */
+//                     10000,       /* Stack size of task */
+//                     NULL,        /* parameter of the task */
+//                     1,           /* priority of the task */
+//                     &Core1Task,      /* Task handle to keep track of created task */
+//                     1);          /* pin task to core 1 */
+//     delay(500); 
+// }
+
+// //Core0TaskCode: blinks an LED every 1000 ms
+// void Core0TaskCode( void * pvParameters )
+// {
+//   for(;;)
+//   {
+//     Serial.print("Core0Task running on core ");
+//     Serial.println(xPortGetCoreID());
+//     digitalWrite(led1, HIGH);
+//     delay(150);
+//     digitalWrite(led1, LOW);
+//     delay(150);
+//   } 
+// }
+
+// //Core1TaskCode: blinks an LED every 700 ms
+// void Core1TaskCode( void * pvParameters )
+// {
+//   for(;;)
+//   {
+//     Serial.print("Core1Task running on core ");
+//     Serial.println(xPortGetCoreID());
+//     digitalWrite(led2, HIGH);
+//     delay(25);
+//     digitalWrite(led2, LOW);
+//     delay(25);
+//   }
+// }
+
+// void loop() 
+// {
+  
+// }

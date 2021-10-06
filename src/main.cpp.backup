@@ -1,0 +1,401 @@
+/*
+  Ford Focus Mk1 - PWM control for high beams (daylights) and Pioneer car stereo remote control from wheel control switch via ESP32-WROOM development board
+  
+  Author:  Yasen Stamov
+  Country: Bulgaria
+  Year:    2021
+*/
+#include <Arduino.h>
+#include <ESP32_IO.h>
+#include <GlobalVariables.h>
+#include <U8g2lib.h>
+#include <ArduinoOTA.h>
+#include <OTAUpdate.h>
+#include <ResetStatesAndVariables.h>
+#include <DefineButton.h>
+#include <WheelSwitchesControl.h>
+#include <HighBeamsPwm.h>
+#include <PrintInfo.h>
+#include <freertos/semphr.h>
+//#include <FreeRTOS.h>
+// Do this only if use ESP32 and PlatformIO
+//void IRAM_ATTR PrintInfo();
+
+//U8G2_SSD1306_128X64_NONAME_1_SW_I2C u8g2(U8G2_R0, /* clock=*/ SCL, /* data=*/ SDA, /* reset=*/ U8X8_PIN_NONE);
+
+void IRAM_ATTR Core0TaskCode(void *pvParameters);
+TaskHandle_t Core0Task;
+SemaphoreHandle_t batton;
+
+void IRAM_ATTR setup()
+{
+  InitPinMode();
+  InitPrintInfo();
+  InitHighBeamsPwm();
+  BeginOTAUpdate();
+
+  xTaskCreatePinnedToCore(
+      Core0TaskCode, /* Task function. */
+      "Core0Task",   /* name of task. */
+      10000,         /* Stack size of task */
+      NULL,          /* parameter of the task */
+      0,             /* priority of the task */
+      &Core0Task,    /* Task handle to keep track of created task */
+      0);            /* pin task to core 0 */
+  delay(500);
+
+  for (int i = 0; i < readingsCount; i++) // Reseting average method output
+  {
+    readings[i] = 0;
+  }
+}
+
+void IRAM_ATTR Core0TaskCode(void *pvParameters)
+{
+  //InitPrintInfo();
+
+  for (;;)
+  {
+    //xSemaphoreTake(batton, portMAX_DELAY);
+    //Serial.print("Core0Task running on core ");
+    //Serial.println(xPortGetCoreID());
+    PrintInfo();
+    //xSemaphoreGive(batton);
+    vTaskDelay(2 / portTICK_PERIOD_MS);
+  }
+}
+
+void IRAM_ATTR loop()
+{
+  //xSemaphoreTake(batton, portMAX_DELAY);
+  ArduinoOTA.handle();
+  DefineButton();
+
+  //PrintInfo();
+  dacWrite(o3v3RingPin, ring3v3ValueToOp);
+  dacWrite(o3v3TipPin, tip3v3ValueToOp);
+  WheelSwitchesControl();
+  HighBeamsPwm();
+  //Serial.print("loop() core: ");
+  //Serial.println(xPortGetCoreID());
+
+  tip3v3FeedbackValue = ((float)analogRead(i3v3TipFeedbackVoltage) / 4096) * refVoltage;
+  ring3v3FeedbackValue = ((float)analogRead(i3v3RingFeedbackVoltage) / 4096) * refVoltage;
+  loopCore = xPortGetCoreID();
+  //xSemaphoreGive(batton);
+  vTaskDelay(2 / portTICK_PERIOD_MS);
+
+  //tip3v3FeedbackValue = analogRead(i3v3TipFeedbackVoltage) * (3.3 / 4095.0)  / (R4 / (R3 + R4)) * 1.084;
+
+  // tip3v3FeedbackValue = (((float)analogRead(i3v3TipFeedbackVoltage) / 4096) * refVoltage) /
+  //                                         (R4real * R4corr / (R3 + R4real * R4corr));          //  * 1.084
+}
+
+/*
+static long readVcc()
+{
+    long result;
+    // Read 1.1V reference against AVcc
+    ADMUX = _BV(REFS0) | _BV(MUX3) | _BV(MUX2) | _BV(MUX1);
+    vTaskDelay(2 / portTICK_PERIOD_MS); // Wait for Vref to settle
+    ADCSRA |= _BV(ADSC); // Convert
+    while (bit_is_set(ADCSRA, ADSC)) ;
+    result = ADCL;
+    result |= ADCH << 8;
+    result = 1125300L / result; // Back-calculate AVcc in mV
+    return result;
+}
+static long readTemp()
+{
+    long result;
+    // Read temperature sensor against 1.1V reference
+    ADMUX = _BV(REFS1) | _BV(REFS0) | _BV(MUX3);
+    vTaskDelay(2 / portTICK_PERIOD_MS); // Wait for Vref to settle
+    ADCSRA |= _BV(ADSC); // Convert
+    while (bit_is_set(ADCSRA, ADSC)) ;
+    result = ADCL;
+    result |= ADCH << 8;
+    result = (result - 125) * 1075;
+    return result;
+}
+
+  unsigned int x = 0;
+  float AcsValue = 0.0, Samples = 0.0, AvgAcs = 0.0, AcsValueF = 0.0;
+  
+  for (int x = 0; x < 150; x++)
+  {
+  AcsValue = analogRead(A0);
+  Samples += AcsValue;
+  vTaskDelay(3 / portTICK_PERIOD_MS);
+  }
+  AvgAcs = Samples / 150.00;
+  AcsValueF = (2.5 - (AvgAcs * (5.0 / 1024.0))) / 0.066 - 0.055; //0,066
+*/
+
+//                                                DC voltage measurement - version 1
+/*
+  Arduino DC Voltage Demo 1
+  dc-voltage-demo.ino
+  Use Arduino A/D converter to measure voltage
+  Use external voltage divider with 30k & 7.5k resistors
+  Results displayed on Serial Monitor
+
+  DroneBot Workshop 2021
+  https://dronebotworkshop.com
+
+
+// Define analog input
+#define ANALOG_IN_PIN A0
+
+// Floats for ADC voltage & Input voltage
+float adcVoltage = 0.0;
+float in_voltage = 0.0;
+
+// Floats for resistor values in divider (in ohms)
+float R1 = 30000.0;
+float R2 = 7500.0; 
+
+// Float for Reference Voltage
+float refVoltage = 5.0;
+
+// Integer for ADC value
+int adcValue = 0;
+
+void IRAM_ATTR setup(){
+   // Setup Serial Monitor
+   Serial.begin(9600);
+   Serial.println("DC Voltage Test");
+}
+
+void IRAM_ATTR loop(){
+   // Read the Analog Input
+   adcValue = analogRead(ANALOG_IN_PIN);
+   
+   // Determine voltage at ADC input
+   adcVoltage  = (adcValue * refVoltage) / 1024.0; 
+   
+   // Calculate voltage at divider input
+   in_voltage = adcVoltage / (R2/(R1+R2)); 
+   
+   // Print results to Serial Monitor to 2 decimal places
+  Serial.print("Input Voltage = ");
+  Serial.println(in_voltage, 2);
+  
+  // Short vTaskDelay
+  vTaskDelay(500 / portTICK_PERIOD_MS);
+}
+*/
+
+//                                                DC voltage measurement - version 2 - with external voltage regulator
+/*
+  Arduino DC Voltage Demo 2
+  dc-voltage-demo-vref.ino
+  Use Arduino A/D converter to measure voltage
+  Use external voltage reference
+  Use external voltage divider with 30k & 7.5k resistors
+  Results displayed on Serial Monitor
+
+  DroneBot Workshop 2021
+  https://dronebotworkshop.com
+
+// Define analog input
+#define ANALOG_IN_PIN A0
+
+// Floats for ADC voltage & Input voltage
+float adcVoltage = 0.0;
+float in_voltage = 0.0;
+
+// Floats for resistor values in divider (in ohms)
+float R1 = 30000.0;
+float R2 = 7500.0; 
+
+// Float for Reference Voltage
+float refVoltage = 4.096;
+
+// Integer for ADC value
+int adcValue = 0;
+
+void IRAM_ATTR setup(){
+  // Use external voltage reference
+  analogReference(EXTERNAL);
+  
+   // Setup Serial Monitor
+   Serial.begin(9600);
+   Serial.println("DC Voltage Test");
+}
+
+void IRAM_ATTR loop(){
+   // Read the Analog Input
+   adcValue = analogRead(ANALOG_IN_PIN);
+   
+   // Determine voltage at ADC input
+   adcVoltage  = (adcValue * refVoltage) / 1024.0; 
+   
+   // Calculate voltage at divider input
+   in_voltage = adcVoltage / (R2/(R1+R2)); 
+   
+   // Print results to Serial Monitor to 2 decimal places
+  Serial.print("Input Voltage = ");
+  Serial.println(in_voltage, 2);
+  
+  // Short vTaskDelay
+  vTaskDelay(500 / portTICK_PERIOD_MS);
+}
+*/
+
+//                                                ACS712 Hall Effect Sensor Sketch
+/*
+  ACS712 DC Current Demonstration
+  acs712-dc-demo.ino
+  Read current using ACS712 Hall Effect sensor
+  
+  DroneBot Workshop 2021
+  https://dronebotworkshop.com
+
+// Variables for Measured Voltage and Calculated Current
+double Vout = 0;
+double Current = 0;
+
+// Constants for Scale Factor
+// Use one that matches your version of ACS712
+
+//const double scale_factor = 0.185; // 5A
+const double scale_factor = 0.1; // 20A
+//const double scale_factor = 0.066; // 30A
+
+// Constants for A/D converter resolution
+// Arduino has 10-bit ADC, so 1024 possible values
+// Reference voltage is 5V if not using AREF external reference
+// Zero point is half of Reference Voltage
+
+const double vRef = 5.00;
+const double resConvert = 1024;
+double resADC = vRef/resConvert;
+double zeroPoint = vRef/2;
+
+
+void IRAM_ATTR setup(){ 
+  Serial.begin(9600);
+}
+
+void IRAM_ATTR loop(){
+  
+  // Vout is read 1000 Times for precision
+  for(int i = 0; i < 1000; i++) {
+    Vout = (Vout + (resADC * analogRead(A0)));   
+    vTaskDelay(1 / portTICK_PERIOD_MS);
+  }
+  
+  // Get Vout in mv
+  Vout = Vout /1000;
+  
+  // Convert Vout into Current using Scale Factor
+  Current = (Vout - zeroPoint)/ scale_factor;                   
+
+  // Print Vout and Current to two Current = ");                  
+
+  Serial.print("Vout = ");           
+  Serial.print(Vout,2); 
+  Serial.print(" Volts");                            
+  Serial.print("\t Current = ");                  
+  Serial.print(Current,2);
+  Serial.println(" Amps");                             
+
+  vTaskDelay(1000 / portTICK_PERIOD_MS); 
+}
+
+
+#define LED_GPIO   18
+#define LED2_GPIO  5
+#define POT_GPIO   34
+#define PWM1_Ch    0
+#define PWM2_Ch    1
+#define PWM1_Res   8
+#define PWM1_Freq  1000
+int PWM1_DutyCycle = 0;
+int PWM2_DutyCycle = 0;
+void IRAM_ATTR setup() 
+{
+  ledcAttachPin(LED_GPIO, PWM1_Ch);
+  ledcAttachPin(LED2_GPIO, PWM2_Ch);
+  ledcSetup(PWM1_Ch, PWM1_Freq, PWM1_Res);
+  ledcSetup(PWM2_Ch, PWM1_Freq, PWM1_Res);
+  Serial.begin(9600);
+}
+void IRAM_ATTR loop() 
+{
+  int potValue = analogRead(POT_GPIO);
+  PWM1_DutyCycle = map (potValue, 0, 4095, 0, 255);
+
+  Serial.println(PWM1_DutyCycle);
+  analogWrite(PWM1_Ch, PWM1_DutyCycle);
+  analogWrite(PWM2_Ch, PWM2_DutyCycle);
+  vTaskDelay(10 / portTICK_PERIOD_MS);
+}
+*/
+
+/*
+For example, for 20kHz PWM frequency:
+* 80 MHz / 20 kHz = 4000
+* log 2 (4000) = 11.965...
+* integer(11.96) = 11 bits
+
+If you like to get 12 bits, then slightly lower PWM frequency from 20 kHz to 80 MHz / 2^12 = 19.531 kHz
+*/
+
+// #include <Arduino.h>          // Base libraries
+// #include <GlobalVariables.h>  // My separated files
+// #include <U8g2lib.h>
+// #include <ESP32_IO.h>
+
+// int PWM1_DutyCycle = 0;
+
+// void IRAM_ATTR setup()
+// {
+//   pinMode(i3v3TipFeedbackVoltage, INPUT);
+//   pinMode(i3v3RingFeedbackVoltage, INPUT);
+
+//   // ledcAttachPin(o3v3TipPin, tip3v3PwmChannel);
+//   // ledcAttachPin(o3v3RingPin, ring3v3PwmChannel);
+//   ledcAttachPin(oHighBeamsPwmPin, highBeamsPwmChannel);
+
+//   // ledcSetup(ring3v3PwmChannel, pwmFrequency2, pwmResolution2);
+//   ledcSetup(highBeamsPwmChannel, highBeamsPwmFrequency, highBeamnsPwmResolution);
+//   Serial.begin(9600);
+// }
+
+// void IRAM_ATTR loop()
+// {
+//   int potValue = analogRead(iPotentiometer);
+
+//   tip3v3FeedbackValue = ((float)analogRead(i3v3TipFeedbackVoltage) / 4096) * refVoltage;
+//   ring3v3FeedbackValue = ((float)analogRead(i3v3RingFeedbackVoltage) / 4096) * refVoltage;
+
+//   PWM1_DutyCycle = map(potValue, 0, 4095, 150, 35);
+
+//   Serial.print("Duty: ");
+//   Serial.print(PWM1_DutyCycle);
+//   Serial.print("\t");
+//   Serial.print("Utip: ");
+//   Serial.print(tip3v3FeedbackValue);
+//   Serial.print("\t");
+//   Serial.print("Uring: ");
+//   Serial.print(ring3v3FeedbackValue);
+//   Serial.println("\t");
+
+//   // if (PWM1_DutyCycle <= 175)
+//   // {
+//   //     ledcSetup(tip3v3PwmChannel, pwmFrequency1, pwmResolution1);
+//   // }
+//   // else
+//   // {
+//   //     ledcSetup(tip3v3PwmChannel, pwmFrequency2, pwmResolution2);
+//   // }
+
+//   // ledcWrite(tip3v3PwmChannel, PWM1_DutyCycle);
+//   // ledcWrite(ring3v3PwmChannel, 0);
+//   dacWrite(o3v3TipPin,PWM1_DutyCycle);
+//   dacWrite(o3v3RingPin,35);
+//   ledcWrite(highBeamsPwmChannel, map(brightnessLevelInPercents, 0, 100, 0, 255));
+//   vTaskDelay(250 / portTICK_PERIOD_MS);
+// }

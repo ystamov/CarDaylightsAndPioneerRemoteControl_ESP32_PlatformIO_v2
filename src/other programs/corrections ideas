@@ -1,0 +1,219 @@
+carVoltageValue = adcVoltage / (R2 / (R1 + R2)) * 1.084;
+carVoltageValue =  (float)analogRead(iCarVoltagePin)/4096 * 15 * (5641.0 / 5000.0);
+
+tip3v3FeedbackValue = analogRead(i3v3TipFeedbackVoltage) * (3.3 / 4095.0)  / (R4 / (R3 + R4)) * 1.084;
+
+tip3v3FeedbackValue = (((float)analogRead(i3v3TipFeedbackVoltage) / 4096) * refVoltage) /
+                                        (R4real * R4corr / (R3 + R4real * R4corr));          //  * 1.084
+
+                                        
+//                                                DC voltage measurement - version 1
+/*
+  Arduino DC Voltage Demo 1
+  dc-voltage-demo.ino
+  Use Arduino A/D converter to measure voltage
+  Use external voltage divider with 30k & 7.5k resistors
+  Results displayed on Serial Monitor
+
+  DroneBot Workshop 2021
+  https://dronebotworkshop.com
+
+
+// Define analog input
+#define ANALOG_IN_PIN A0
+
+// Floats for ADC voltage & Input voltage
+float adcVoltage = 0.0;
+float in_voltage = 0.0;
+
+// Floats for resistor values in divider (in ohms)
+float R1 = 30000.0;
+float R2 = 7500.0; 
+
+// Float for Reference Voltage
+float refVoltage = 5.0;
+
+// Integer for ADC value
+int adcValue = 0;
+
+void setup(){
+   // Setup Serial Monitor
+   Serial.begin(9600);
+   Serial.println("DC Voltage Test");
+}
+
+void loop(){
+   // Read the Analog Input
+   adcValue = analogRead(ANALOG_IN_PIN);
+   
+   // Determine voltage at ADC input
+   adcVoltage  = (adcValue * refVoltage) / 1024.0; 
+   
+   // Calculate voltage at divider input
+   in_voltage = adcVoltage / (R2/(R1+R2)); 
+   
+   // Print results to Serial Monitor to 2 decimal places
+  Serial.print("Input Voltage = ");
+  Serial.println(in_voltage, 2);
+  
+  // Short vTaskDelay
+  vTaskDelay(500 / portTICK_PERIOD_MS);
+}
+*/
+
+//                                                DC voltage measurement - version 2 - with external voltage regulator
+/*
+  Arduino DC Voltage Demo 2
+  dc-voltage-demo-vref.ino
+  Use Arduino A/D converter to measure voltage
+  Use external voltage reference
+  Use external voltage divider with 30k & 7.5k resistors
+  Results displayed on Serial Monitor
+
+  DroneBot Workshop 2021
+  https://dronebotworkshop.com
+
+// Define analog input
+#define ANALOG_IN_PIN A0
+
+// Floats for ADC voltage & Input voltage
+float adcVoltage = 0.0;
+float in_voltage = 0.0;
+
+// Floats for resistor values in divider (in ohms)
+float R1 = 30000.0;
+float R2 = 7500.0; 
+
+// Float for Reference Voltage
+float refVoltage = 4.096;
+
+// Integer for ADC value
+int adcValue = 0;
+
+void setup(){
+  // Use external voltage reference
+  analogReference(EXTERNAL);
+  
+   // Setup Serial Monitor
+   Serial.begin(9600);
+   Serial.println("DC Voltage Test");
+}
+
+void loop(){
+   // Read the Analog Input
+   adcValue = analogRead(ANALOG_IN_PIN);
+   
+   // Determine voltage at ADC input
+   adcVoltage  = (adcValue * refVoltage) / 1024.0; 
+   
+   // Calculate voltage at divider input
+   in_voltage = adcVoltage / (R2/(R1+R2)); 
+   
+   // Print results to Serial Monitor to 2 decimal places
+  Serial.print("Input Voltage = ");
+  Serial.println(in_voltage, 2);
+  
+  // Short vTaskDelay
+  vTaskDelay(500 / portTICK_PERIOD_MS);
+}
+*/
+
+//                                                ACS712 Hall Effect Sensor Sketch
+/*
+  ACS712 DC Current Demonstration
+  acs712-dc-demo.ino
+  Read current using ACS712 Hall Effect sensor
+  
+  DroneBot Workshop 2021
+  https://dronebotworkshop.com
+
+// Variables for Measured Voltage and Calculated Current
+double Vout = 0;
+double Current = 0;
+
+// Constants for Scale Factor
+// Use one that matches your version of ACS712
+
+//const double scale_factor = 0.185; // 5A
+const double scale_factor = 0.1; // 20A
+//const double scale_factor = 0.066; // 30A
+
+// Constants for A/D converter resolution
+// Arduino has 10-bit ADC, so 1024 possible values
+// Reference voltage is 5V if not using AREF external reference
+// Zero point is half of Reference Voltage
+
+const double vRef = 5.00;
+const double resConvert = 1024;
+double resADC = vRef/resConvert;
+double zeroPoint = vRef/2;
+
+
+void setup(){ 
+  Serial.begin(9600);
+}
+
+void loop(){
+  
+  // Vout is read 1000 Times for precision
+  for(int i = 0; i < 1000; i++) {
+    Vout = (Vout + (resADC * analogRead(A0)));   
+    vTaskDelay(1 / portTICK_PERIOD_MS);
+  }
+  
+  // Get Vout in mv
+  Vout = Vout /1000;
+  
+  // Convert Vout into Current using Scale Factor
+  Current = (Vout - zeroPoint)/ scale_factor;                   
+
+  // Print Vout and Current to two Current = ");                  
+
+  Serial.print("Vout = ");           
+  Serial.print(Vout,2); 
+  Serial.print(" Volts");                            
+  Serial.print("\t Current = ");                  
+  Serial.print(Current,2);
+  Serial.println(" Amps");                             
+
+  vTaskDelay(1000 / portTICK_PERIOD_MS); 
+}
+
+
+#define LED_GPIO   18
+#define LED2_GPIO  5
+#define POT_GPIO   34
+#define PWM1_Ch    0
+#define PWM2_Ch    1
+#define PWM1_Res   8
+#define PWM1_Freq  1000
+int PWM1_DutyCycle = 0;
+int PWM2_DutyCycle = 0;
+void setup() 
+{
+  ledcAttachPin(LED_GPIO, PWM1_Ch);
+  ledcAttachPin(LED2_GPIO, PWM2_Ch);
+  ledcSetup(PWM1_Ch, PWM1_Freq, PWM1_Res);
+  ledcSetup(PWM2_Ch, PWM1_Freq, PWM1_Res);
+  Serial.begin(9600);
+}
+void loop() 
+{
+  int potValue = analogRead(POT_GPIO);
+  PWM1_DutyCycle = map (potValue, 0, 4095, 0, 255);
+
+  Serial.println(PWM1_DutyCycle);
+  analogWrite(PWM1_Ch, PWM1_DutyCycle);
+  analogWrite(PWM2_Ch, PWM2_DutyCycle);
+  vTaskDelay(10 / portTICK_PERIOD_MS);
+}
+*/
+
+/*
+For example, for 20kHz PWM frequency:
+* 80 MHz / 20 kHz = 4000
+* log 2 (4000) = 11.965...
+* integer(11.96) = 11 bits
+
+If you like to get 12 bits, then slightly lower PWM frequency from 20 kHz to 80 MHz / 2^12 = 19.531 kHz
+*/

@@ -1,0 +1,896 @@
+/*
+  Ford Focus Mk1 - PWM control for high beams (daylights) and Pioneer car stereo remote control from wheel control switch via ESP32-WROOM development board
+  
+  Author:  Yasen Stamov
+  Country: Bulgaria
+  Year:    2021
+*/
+#include <Arduino.h>          // Base libraries
+#include <GlobalVariables.h>  // My separated files
+#include <ESP32_IO.h>
+#include <ESPmDNS.h>          // OTA libraries
+#include <WiFiUdp.h>
+#include <ArduinoOTA.h>
+#include <U8g2lib.h>
+
+U8G2_SSD1306_128X64_NONAME_1_SW_I2C u8g2(U8G2_R0, /* clock=*/ SCL, /* data=*/ SDA, /* reset=*/ U8X8_PIN_NONE);
+
+// Do this only if use ESP32 and PlatformIO, because it used C++
+void WheelSwitchesControl();
+void BeepCommandRecognized();
+void ResetStatesAndVariables();
+void MeasureButtonTime();
+void PrintInfoSerial();
+void GenerateNormalOrHoldedOutput(int tip3v3Value, String currentState);
+void GenerateTimedOutput(int tip3v3Value, int ring3v3Value, String currentState, int outputTime);
+void PrintInfo();
+void HighBeamsPWM();
+void BeepPwmFinished();
+void CalculateCarVoltageValueFiltered(float carVoltageValue);
+void DefineButton();
+void BeginOTAUpdate();
+
+void setup()
+{
+    pinMode(iPwmOnPin,                  INPUT_PULLDOWN);
+    pinMode(iCarVoltagePin,             INPUT);
+    pinMode(iHighBeamsCurrentSensorPin, INPUT);
+    pinMode(iWheelSwitchPin,            INPUT);
+
+    pinMode(oBuzzerPin,                 OUTPUT);
+    pinMode(oHighBeamsPwmPin,           OUTPUT);
+    pinMode(oLedPin,                    OUTPUT);
+    pinMode(o3v3RingPin,                OUTPUT);
+    pinMode(o3v3TipPin,                 OUTPUT);
+
+    Serial.begin(9600);
+    u8g2.begin();
+    ResetStatesAndVariables();
+    BeginOTAUpdate();
+
+    for (int i = 0; i < readingsCount; i++) // Reseting average method output
+    {
+        readings[i] = 0;
+    }
+    // for (int i2 = 0; i2 < readingsCount2; i2++) // Reseting average method output
+    // {
+    //     readings2[i2] = 0;
+    // }
+    brightnessLevel = map(brightnessLevelInPercents, 0, 100, 0, 255);
+
+    ledcSetup(highBeamsPwmChannel, highBeamsPwmFrequency, pwmResolution);
+    ledcAttachPin(oHighBeamsPwmPin, highBeamsPwmChannel);
+
+    ledcSetup(tip3v3PwmChannel, tipRingPwmFrequency, pwmResolution);
+    ledcAttachPin(o3v3TipPin, tip3v3PwmChannel);
+
+    ledcSetup(ring3v3PwmChannel, tipRingPwmFrequency, pwmResolution);
+    ledcAttachPin(o3v3RingPin, ring3v3PwmChannel);
+}
+
+void loop()
+{   
+    ArduinoOTA.handle();
+    DefineButton();
+    ledcWrite(ring3v3PwmChannel, ring3v3Value);
+    ledcWrite(tip3v3PwmChannel, tip3v3Value);
+    WheelSwitchesControl();
+    HighBeamsPWM();
+}
+void WheelSwitchesControl()
+{
+    
+    
+    if (noButtonPressed) // Pressed and released buttons
+    {
+        if (currentState == "modePressed")
+        {
+            tip3v3Value = 20;
+            //ring3v3Value = ring3v3WorkValue;
+            GenerateTimedOutput(tip3v3Value, ring3v3Value, currentState, normalOutputTime);
+        }
+
+        ResetStatesAndVariables();
+    }
+    else
+    {
+        if (modePressed || volumeUpPressed || volumeDownPressed || seekUpPressed || seekDownPressed) // modePressed (radio source), modeHolded, answerCall, endCall, folderDown, folderDown, seekUp, seekDown, volumeUp, volumeDown
+        {
+            MeasureButtonTime();
+
+            if (inMonitoredWindow)  // modePressed (radio source), answerCall, endCall, folderDown, folderDown, seekUp, seekDown, volumeUp, volumeDown
+            {
+                if (modePressed && commandRecognized == false)
+                {
+                    if (buttonHolded)
+                    {
+                        currentState = "modeHolded";
+                    }
+                    else
+                    {
+                        currentState = "modePressed";
+                    }
+                }
+                // else if (answerCallCommandRecognized)        //TODO: to finish answerCall & endCall logics
+                // {
+                //     currentState = "answerCall";
+                //     GenerateTimedOutput(currentState, normalOutputTime);
+                //     commandRecognized = true;
+                // }
+                // else if (endCallCommandRecognized)
+                // {
+                //     currentState = "endCall";
+                //     GenerateTimedOutput(currentState, normalOutputTime);
+                //     commandRecognized = true;
+                // }
+                else if (bandCommandRecognized)
+                {
+                    currentState = "band";
+                    tip3v3Value = 4;
+                    //ring3v3Value = ring3v3WorkValue;
+                    GenerateTimedOutput(tip3v3Value, ring3v3Value, currentState, normalOutputTime);
+                    commandRecognized = true;
+                }
+                
+                else if (folderDownCommandRecognized)
+                {
+                    currentState = "folderDown";
+                    tip3v3Value = 10;
+                    ring3v3Value = ring3v3WorkValue;
+                    GenerateTimedOutput(tip3v3Value, ring3v3Value, currentState, normalOutputTime);
+                    commandRecognized = true;
+                }
+                
+                else if (seekUpCommandRecognized)
+                {
+                    currentState = "seekUp";
+                    tip3v3Value = 12;
+                    GenerateNormalOrHoldedOutput(tip3v3Value, currentState);
+                    commandRecognized = true;
+                }
+                else if (seekDownCommandRecognized)
+                {
+                    currentState = "seekDown";
+                    tip3v3Value = 10;
+                    GenerateNormalOrHoldedOutput(tip3v3Value, currentState);
+                    commandRecognized = true;
+                }
+                else if (volumeUpCommandRecognized)
+                {
+                    currentState = "volumeUp";
+                    tip3v3Value = 8;
+                    GenerateNormalOrHoldedOutput(tip3v3Value, currentState);
+                    commandRecognized = true;
+                }
+                else if (volumeDownCommandRecognized)
+                {
+                    currentState = "volumeDown";
+                    tip3v3Value = 7;
+                    GenerateNormalOrHoldedOutput(tip3v3Value, currentState);
+                    commandRecognized = true;
+                }
+                if (folderDownRepeatCommandRecognized)
+                {
+                    currentState = "folderDownRepeat";
+                    tip3v3Value = 10;
+                    ring3v3Value = ring3v3WorkValue;
+                    GenerateTimedOutput(tip3v3Value, ring3v3Value, currentState, normalOutputTime);
+                    commandRecognized = true;
+                }
+                else if (bandRepeatCommandRecognized)
+                {
+                    currentState = "bandRepeat";
+                    tip3v3Value = 4;
+                    ring3v3Value = ring3v3WorkValue;
+                    GenerateTimedOutput(tip3v3Value, ring3v3Value, currentState, normalOutputTime);
+                    commandRecognized = true;
+                }
+            }
+            else                    // modeHolded above monitored window = radio off
+            {
+                if (currentState == "modeHolded" && commandRecognized == false)
+                {
+                    tip3v3Value = 20;
+                    //ring3v3Value = ring3v3WorkValue;
+                    GenerateTimedOutput(tip3v3Value, ring3v3Value, currentState, holdedOutputTime);
+                    commandRecognized = true;
+                }
+                if (folderDownRepeatCommandRecognized)
+                {
+                    currentState = "folderDownRepeat";
+                    tip3v3Value = 10;
+                    ring3v3Value = ring3v3WorkValue;
+                    GenerateTimedOutput(tip3v3Value, ring3v3Value, currentState, normalOutputTime);
+                    commandRecognized = true;
+                }
+                else if (bandRepeatCommandRecognized)
+                {
+                    currentState = "bandRepeat";
+                    tip3v3Value = 4;
+                    GenerateTimedOutput(tip3v3Value, ring3v3Value, currentState, normalOutputTime);
+                    commandRecognized = true;
+                }
+            }
+        }
+    }
+    PrintInfo();
+    PrintInfoSerial();
+}
+
+void PrintInfo()
+{
+    u8g2.setFont(u8g2_font_7x13_mf);
+    u8g2.firstPage();
+    do 
+    {
+      u8g2.drawLine(0, 16, 128, 16);  // X1 line -> X1, Y1, X2, Y2
+      u8g2.drawLine(63, 0, 63, 60);   // Y1 line -> X1, Y1, X2, Y2
+      u8g2.drawLine(0, 33, 128, 33);  // X2 line -> X1, Y1, X2, Y2
+      u8g2.drawLine(0, 50, 128, 50);  // X3 line -> X1, Y1, X2, Y2
+      u8g2.setCursor(3, 12);
+      // u8g2.print("Eng: ");
+      // u8g2.print("On");                                      // TODO: this value must be changed with dynamic variable later....
+      // u8g2.setCursor(67, 12);
+      u8g2.print("U: ");
+      u8g2.print(carVoltageValueFiltered, 1);
+      u8g2.print("V");
+      u8g2.setCursor(3, 29);
+      u8g2.print("PWM: ");
+      u8g2.print(map(currentPwmLevel, 0, 255, 0, 100));
+      u8g2.print("%");
+      u8g2.setCursor(67, 29);
+      // u8g2.print("I: ");
+      // u8g2.print(0.0, 1);                                       // TODO: this value must be changed with dynamic variable later....
+      // u8g2.print(" A");
+      u8g2.setCursor(3, 46);
+      u8g2.print("Bn: ");
+      u8g2.print(buttonValue);
+      // u8g2.setCursor(67, 46);
+      // u8g2.print("");
+      // u8g2.print("");
+      u8g2.setCursor(3, 62);
+      u8g2.print("S: ");
+      u8g2.print(currentState);
+    }
+    while ( u8g2.nextPage() );
+}
+void PrintInfoSerial()
+{
+    // Serial.print("pwmOn: ");
+    // Serial.print(pwmOnSwitch);
+    // Serial.print("\t");
+    // Serial.print("brightnessLevel: ");
+    // Serial.print(brightnessLevelInPercents);
+    // Serial.print(" %");
+    // Serial.print("\t");
+    // Serial.print("currentPwmLevel: ");
+    // Serial.print(map(currentPwmLevel, 0, 255, 0, 100));
+    // Serial.print(" %");
+    // Serial.print("\t");
+    Serial.print("ring3v3Value: ");
+    Serial.print(ring3v3Value);
+    Serial.print("\t");
+    Serial.print("tip3v3Value: ");
+    Serial.print(tip3v3Value);
+    Serial.print("\t");
+    // Serial.print("millis: ");
+    // Serial.print(millis());
+    // Serial.print(" ms");
+    // Serial.print("\t");
+    // Serial.print("buttonPressStartTime: ");
+    // Serial.print(buttonPressStartTime);
+    // Serial.print(" ms");
+    // Serial.print("\t");
+    Serial.print("carVoltageRaw: ");
+    Serial.print(carVoltageValue);
+    Serial.print(" V");
+    Serial.print("\t");
+    Serial.print("carVoltageValueFiltered: ");
+    Serial.print(carVoltageValueFiltered);
+    Serial.print(" V");
+    Serial.print("\t");
+    Serial.print("buttonValue: ");
+    Serial.print(buttonValue);
+    Serial.print("\t");
+    Serial.print("currentState: ");
+    Serial.print(currentState);
+    Serial.print("\t");
+    Serial.print("activatedOutput: ");
+    Serial.println(activatedOutput);
+}
+
+void GenerateNormalOrHoldedOutput(int tip3v3Value, String currentState)
+{
+    activatedOutput = currentState;
+    ledcWrite(tip3v3PwmChannel, tip3v3Value);
+    PrintInfo();
+    PrintInfoSerial();
+    BeepCommandRecognized();
+    
+    DefineButton();
+
+    if (noButtonPressed)
+    {
+      ResetStatesAndVariables();
+    }
+}
+
+void GenerateTimedOutput(int tip3v3Value, int ring3v3Value, String currentState, int outputTime)
+{
+    activatedOutput = currentState;
+
+    if (complexCommand)
+    {
+      ledcWrite(ring3v3PwmChannel, ring3v3Value);
+      vTaskDelay(20);
+      ledcWrite(tip3v3PwmChannel, tip3v3Value);
+    }
+    else
+    {
+      ledcWrite(tip3v3PwmChannel, tip3v3Value);                 // THIS IS ONLY WHEN modePressed run
+    }
+
+    PrintInfo();
+    PrintInfoSerial();
+    BeepCommandRecognized();
+    vTaskDelay(outputTime);
+
+    if (currentState == "folderDownRepeat" || currentState == "bandRepeat")
+    {
+      tip3v3Value = 0;
+      ring3v3Value = 0;
+      ledcWrite(tip3v3PwmChannel, tip3v3Value);
+      ledcWrite(ring3v3PwmChannel, ring3v3Value);
+      activatedOutput = "noOutput";
+    }
+    
+}
+
+void ResetStatesAndVariables()
+{
+    currentState = "noButton";
+    activatedOutput = "noOutput";
+    buttonPressStartTime = 0;
+    buttonPressedTime = 0;
+    commandRecognized = false;
+    tip3v3Value = 0;
+    ring3v3Value = 0;
+}
+
+void BeepCommandRecognized()
+{
+    digitalWrite(oBuzzerPin, HIGH);
+    digitalWrite(oLedPin, HIGH);
+    vTaskDelay(16);
+    digitalWrite(oBuzzerPin, LOW);
+    digitalWrite(oLedPin, LOW);
+}
+
+void DefineButton()
+{
+    buttonValue = analogRead(iWheelSwitchPin);
+    buttonValue = map(buttonValue, 0, 4095, 0, 1023);
+    
+    noButtonPressed   = buttonValue > 0 && buttonValue < 250;
+    seekDownPressed   = buttonValue > 535 && buttonValue < 640;
+    seekUpPressed     = buttonValue > 650 && buttonValue < 730;
+    volumeUpPressed   = buttonValue > 760 && buttonValue < 840;
+    volumeDownPressed = buttonValue > 880 && buttonValue < 950;
+    modePressed       = buttonValue > 390 && buttonValue < 450;
+
+    answerCallCommandRecognized       = volumeUpPressed   && currentState.indexOf("mode") > -1;
+    endCallCommandRecognized          = volumeDownPressed && currentState.indexOf("mode") > -1;
+    folderDownCommandRecognized         = seekUpPressed     && currentState.indexOf("mode") > -1;
+    bandCommandRecognized             = seekDownPressed   && currentState.indexOf("mode") > -1;
+    folderDownRepeatCommandRecognized   = seekUpPressed     && (currentState == "folderDown" || currentState == "folderDownRepeat");
+    bandRepeatCommandRecognized       = seekDownPressed   && (currentState == "band"     || currentState == "bandRepeat");
+    seekUpCommandRecognized           = seekUpPressed     && currentState == "noButton";
+    seekDownCommandRecognized         = seekDownPressed   && currentState == "noButton";
+    volumeUpCommandRecognized         = volumeUpPressed   && currentState == "noButton";
+    volumeDownCommandRecognized       = volumeDownPressed && currentState == "noButton";
+    complexCommand                    = answerCallCommandRecognized || 
+                                        endCallCommandRecognized    || 
+                                        bandCommandRecognized || 
+                                        folderDownCommandRecognized;
+}
+
+void MeasureButtonTime()
+{
+    if (buttonPressStartTime == 0)
+    {
+        buttonPressStartTime = millis();
+    }
+
+    buttonPressedTime = millis() - buttonPressStartTime;
+    inMonitoredWindow = buttonPressedTime <= buttonHoldMaxTime;
+    buttonHolded = buttonPressedTime > buttonPressMaxTime;
+}
+
+
+void HighBeamsPWM()
+{
+    pwmOnSwitch = digitalRead(iPwmOnPin);
+    float carVoltageValueRaw = (analogRead(iCarVoltagePin));
+    adc_voltage  = (carVoltageValueRaw * ref_voltage) / 4095.0;
+
+    // Calculate voltage at divider input
+    carVoltageValue = adc_voltage / (R2 / (R1 + R2)) * 1.084;
+
+    CalculateCarVoltageValueFiltered(carVoltageValue);
+
+    if (pwmOnSwitch == HIGH)
+    {
+      if (carVoltageValueFiltered > 13.0)    
+      {
+          digitalWrite(oLedPin, HIGH);
+
+          if (currentPwmLevel < brightnessLevel)
+          {
+              pwmMillisTime += globalMillisTime;
+
+              if (pwmMillisTime % 2 == 0)
+              {
+                  currentPwmLevel += pwmIncrementStep;
+
+                  if (currentPwmLevel == brightnessLevel)
+                  {
+                      BeepPwmFinished();
+                  }
+              }
+          }
+          else
+          {
+              if (currentPwmLevel > brightnessLevel)
+              {
+                  BeepPwmFinished();
+              }
+
+              currentPwmLevel = brightnessLevel;
+              pwmMillisTime = 0;
+          }
+
+          ledcWrite(highBeamsPwmChannel, currentPwmLevel);
+      }
+      else
+      {
+        digitalWrite(oLedPin, LOW);
+        currentPwmLevel = 0;
+        ledcWrite(highBeamsPwmChannel, currentPwmLevel);
+      }
+    }
+    else
+    {
+      digitalWrite(oLedPin, LOW);
+      currentPwmLevel = 0;
+      ledcWrite(highBeamsPwmChannel, currentPwmLevel);
+    }
+}
+
+void CalculateCarVoltageValueFiltered(float carVoltageValue)
+{
+    totalReadings -= readings[indexx];      // izvajda poslednata otchetena stojnost
+    readings[indexx] = carVoltageValue;     // otchita danni ot senzora...
+    totalReadings += readings[indexx];      // ...pribavya gi kam sbora...
+    indexx++;                               // ...i preminava kam otchitane na sledvashta stojnost
+    if (indexx >= readingsCount)
+    {
+        indexx = 0;
+    }
+    
+    carVoltageValueFiltered = totalReadings / readingsCount;    // * 2.36271
+}
+// void CalculateButtonValueValueFiltered(int buttonValue)
+// {
+//     if (indexx2 > 2 && buttonValue < buttonValueFiltered - 30 && buttonValue > buttonValueFiltered + 30)
+//     {
+//       buttonValue = buttonValueFiltered;
+//     }
+    
+
+//     totalReadings2 -= readings2[indexx2];      // izvajda poslednata otchetena stojnost
+//     readings2[indexx2] = buttonValue;     // otchita danni ot senzora...
+//     totalReadings2 += readings2[indexx2];      // ...pribavya gi kam sbora...
+//     indexx2++;                               // ...i preminava kam otchitane na sledvashta stojnost
+//     if (indexx2 >= readingsCount2)
+//     {
+//         indexx2 = 0;
+//     }
+//     buttonValueFiltered = totalReadings2 / readingsCount2;    // * 2.36271
+// }
+
+void BeepPwmFinished()
+{
+    digitalWrite(oBuzzerPin, HIGH);
+    vTaskDelay(260);
+    digitalWrite(oBuzzerPin, LOW);
+    vTaskDelay(110);
+    digitalWrite(oBuzzerPin, HIGH);
+    vTaskDelay(55);
+    digitalWrite(oBuzzerPin, LOW);
+    vTaskDelay(55);
+    digitalWrite(oBuzzerPin, HIGH);
+    vTaskDelay(25);
+    digitalWrite(oBuzzerPin, LOW);
+}
+
+void BeginOTAUpdate()
+{
+    Serial.println("Booting");
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(ssid, password);
+    while (WiFi.waitForConnectResult() != WL_CONNECTED) 
+    {
+      Serial.println("Connection Failed! Rebooting...");            // TODO: to think how to exit from this situation elegant
+      vTaskDelay(1000);
+      break;
+      //vTaskDelay(5000);
+      //ESP.restart();
+    }
+
+  /*
+    Port defaults to 3232
+    ArduinoOTA.setPort(3232);
+
+    Hostname defaults to esp3232-[MAC]
+    ArduinoOTA.setHostname("myesp32");
+
+    No authentication by default
+    ArduinoOTA.setPassword("admin");
+
+    Password can be set with it's md5 value as well
+    MD5(admin) = 21232f297a57a5a743894a0e4a801fc3
+    ArduinoOTA.setPasswordHash("21232f297a57a5a743894a0e4a801fc3");
+  */
+
+  ArduinoOTA
+    .onStart([]() 
+      {
+        String type;
+        if (ArduinoOTA.getCommand() == U_FLASH)
+        {
+          type = "sketch";
+        }
+        else // U_SPIFFS
+        {
+          type = "filesystem";
+        }
+
+        Serial.println("Start updating " + type);  // NOTE: if updating SPIFFS this would be the place to unmount SPIFFS using SPIFFS.end()
+      })
+    .onEnd([]() 
+      {
+        Serial.println("\nEnd");
+      })
+    .onProgress([](unsigned int progress, unsigned int total) 
+      {
+        Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+      })
+    .onError([](ota_error_t error) 
+      {
+        Serial.printf("Error[%u]: ", error);
+
+        if (error == OTA_AUTH_ERROR) 
+        {
+          Serial.println("Auth Failed");
+        }
+        else if (error == OTA_BEGIN_ERROR) 
+        {
+          Serial.println("Begin Failed");
+        }
+        else if (error == OTA_CONNECT_ERROR) 
+        {
+          Serial.println("Connect Failed");
+        }
+        else if (error == OTA_RECEIVE_ERROR) 
+        {
+          Serial.println("Receive Failed");
+        }
+        else if (error == OTA_END_ERROR) 
+        {
+          Serial.println("End Failed");
+        }
+      });
+
+    ArduinoOTA.begin();
+    Serial.println("Ready");
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());
+}
+/*
+static long readVcc()
+{
+    long result;
+    // Read 1.1V reference against AVcc
+    ADMUX = _BV(REFS0) | _BV(MUX3) | _BV(MUX2) | _BV(MUX1);
+    vTaskDelay(2); // Wait for Vref to settle
+    ADCSRA |= _BV(ADSC); // Convert
+    while (bit_is_set(ADCSRA, ADSC)) ;
+    result = ADCL;
+    result |= ADCH << 8;
+    result = 1125300L / result; // Back-calculate AVcc in mV
+    return result;
+}
+static long readTemp()
+{
+    long result;
+    // Read temperature sensor against 1.1V reference
+    ADMUX = _BV(REFS1) | _BV(REFS0) | _BV(MUX3);
+    vTaskDelay(2); // Wait for Vref to settle
+    ADCSRA |= _BV(ADSC); // Convert
+    while (bit_is_set(ADCSRA, ADSC)) ;
+    result = ADCL;
+    result |= ADCH << 8;
+    result = (result - 125) * 1075;
+    return result;
+}
+
+  unsigned int x = 0;
+  float AcsValue = 0.0, Samples = 0.0, AvgAcs = 0.0, AcsValueF = 0.0;
+  
+  for (int x = 0; x < 150; x++)
+  {
+  AcsValue = analogRead(A0);
+  Samples += AcsValue;
+  vTaskDelay(3);
+  }
+  AvgAcs = Samples / 150.00;
+  AcsValueF = (2.5 - (AvgAcs * (5.0 / 1024.0))) / 0.066 - 0.055; //0,066
+*/
+
+//                                                DC voltage measurement - version 1
+/*
+  Arduino DC Voltage Demo 1
+  dc-voltage-demo.ino
+  Use Arduino A/D converter to measure voltage
+  Use external voltage divider with 30k & 7.5k resistors
+  Results displayed on Serial Monitor
+
+  DroneBot Workshop 2021
+  https://dronebotworkshop.com
+
+
+// Define analog input
+#define ANALOG_IN_PIN A0
+
+// Floats for ADC voltage & Input voltage
+float adc_voltage = 0.0;
+float in_voltage = 0.0;
+
+// Floats for resistor values in divider (in ohms)
+float R1 = 30000.0;
+float R2 = 7500.0; 
+
+// Float for Reference Voltage
+float ref_voltage = 5.0;
+
+// Integer for ADC value
+int adc_value = 0;
+
+void setup(){
+   // Setup Serial Monitor
+   Serial.begin(9600);
+   Serial.println("DC Voltage Test");
+}
+
+void loop(){
+   // Read the Analog Input
+   adc_value = analogRead(ANALOG_IN_PIN);
+   
+   // Determine voltage at ADC input
+   adc_voltage  = (adc_value * ref_voltage) / 1024.0; 
+   
+   // Calculate voltage at divider input
+   in_voltage = adc_voltage / (R2/(R1+R2)); 
+   
+   // Print results to Serial Monitor to 2 decimal places
+  Serial.print("Input Voltage = ");
+  Serial.println(in_voltage, 2);
+  
+  // Short vTaskDelay
+  vTaskDelay(500);
+}
+*/
+
+//                                                DC voltage measurement - version 2 - with external voltage regulator
+/*
+  Arduino DC Voltage Demo 2
+  dc-voltage-demo-vref.ino
+  Use Arduino A/D converter to measure voltage
+  Use external voltage reference
+  Use external voltage divider with 30k & 7.5k resistors
+  Results displayed on Serial Monitor
+
+  DroneBot Workshop 2021
+  https://dronebotworkshop.com
+
+// Define analog input
+#define ANALOG_IN_PIN A0
+
+// Floats for ADC voltage & Input voltage
+float adc_voltage = 0.0;
+float in_voltage = 0.0;
+
+// Floats for resistor values in divider (in ohms)
+float R1 = 30000.0;
+float R2 = 7500.0; 
+
+// Float for Reference Voltage
+float ref_voltage = 4.096;
+
+// Integer for ADC value
+int adc_value = 0;
+
+void setup(){
+  // Use external voltage reference
+  analogReference(EXTERNAL);
+  
+   // Setup Serial Monitor
+   Serial.begin(9600);
+   Serial.println("DC Voltage Test");
+}
+
+void loop(){
+   // Read the Analog Input
+   adc_value = analogRead(ANALOG_IN_PIN);
+   
+   // Determine voltage at ADC input
+   adc_voltage  = (adc_value * ref_voltage) / 1024.0; 
+   
+   // Calculate voltage at divider input
+   in_voltage = adc_voltage / (R2/(R1+R2)); 
+   
+   // Print results to Serial Monitor to 2 decimal places
+  Serial.print("Input Voltage = ");
+  Serial.println(in_voltage, 2);
+  
+  // Short vTaskDelay
+  vTaskDelay(500);
+}
+*/
+
+//                                                ACS712 Hall Effect Sensor Sketch
+/*
+  ACS712 DC Current Demonstration
+  acs712-dc-demo.ino
+  Read current using ACS712 Hall Effect sensor
+  
+  DroneBot Workshop 2021
+  https://dronebotworkshop.com
+
+// Variables for Measured Voltage and Calculated Current
+double Vout = 0;
+double Current = 0;
+
+// Constants for Scale Factor
+// Use one that matches your version of ACS712
+
+//const double scale_factor = 0.185; // 5A
+const double scale_factor = 0.1; // 20A
+//const double scale_factor = 0.066; // 30A
+
+// Constants for A/D converter resolution
+// Arduino has 10-bit ADC, so 1024 possible values
+// Reference voltage is 5V if not using AREF external reference
+// Zero point is half of Reference Voltage
+
+const double vRef = 5.00;
+const double resConvert = 1024;
+double resADC = vRef/resConvert;
+double zeroPoint = vRef/2;
+
+
+void setup(){ 
+  Serial.begin(9600);
+}
+
+void loop(){
+  
+  // Vout is read 1000 Times for precision
+  for(int i = 0; i < 1000; i++) {
+    Vout = (Vout + (resADC * analogRead(A0)));   
+    vTaskDelay(1);
+  }
+  
+  // Get Vout in mv
+  Vout = Vout /1000;
+  
+  // Convert Vout into Current using Scale Factor
+  Current = (Vout - zeroPoint)/ scale_factor;                   
+
+  // Print Vout and Current to two Current = ");                  
+
+  Serial.print("Vout = ");           
+  Serial.print(Vout,2); 
+  Serial.print(" Volts");                            
+  Serial.print("\t Current = ");                  
+  Serial.print(Current,2);
+  Serial.println(" Amps");                             
+
+  vTaskDelay(1000); 
+}
+
+
+#define LED_GPIO   18
+#define LED2_GPIO  5
+#define POT_GPIO   34
+#define PWM1_Ch    0
+#define PWM2_Ch    1
+#define PWM1_Res   8
+#define PWM1_Freq  1000
+int PWM1_DutyCycle = 0;
+int PWM2_DutyCycle = 0;
+void setup() 
+{
+  ledcAttachPin(LED_GPIO, PWM1_Ch);
+  ledcAttachPin(LED2_GPIO, PWM2_Ch);
+  ledcSetup(PWM1_Ch, PWM1_Freq, PWM1_Res);
+  ledcSetup(PWM2_Ch, PWM1_Freq, PWM1_Res);
+  Serial.begin(9600);
+}
+void loop() 
+{
+  int potValue = analogRead(POT_GPIO);
+  PWM1_DutyCycle = map (potValue, 0, 4095, 0, 255);
+
+  Serial.println(PWM1_DutyCycle);
+  analogWrite(PWM1_Ch, PWM1_DutyCycle);
+  analogWrite(PWM2_Ch, PWM2_DutyCycle);
+  vTaskDelay(10);
+}
+
+
+*/
+
+
+//#include <Arduino.h>          // Base libraries
+// #include <GlobalVariables.h>  // My separated files
+// #include <ESP32_IO.h>
+// #include <ESPmDNS.h>          // OTA libraries
+// #include <WiFiUdp.h>
+// #include <ArduinoOTA.h>
+// #include <U8g2lib.h>
+
+// /*
+
+// For example, for 20kHz PWM frequency:
+// * 80 MHz / 20 kHz = 4000
+// * log 2 (4000) = 11.965...
+// * integer(11.96) = 11 bits
+
+// If you like to get 12 bits, then slightly lower PWM frequency from 20 kHz to 80 MHz / 2^12 = 19.531 kHz
+
+// */
+// #define LED_GPIO   4
+// #define LED2_GPIO  2
+// #define LED3_GPIO  27
+// #define POT_GPIO   35
+// #define PWM1_Ch    0
+// #define PWM2_Ch    1
+// #define PWM3_Ch    2
+// #define PWM1_Res   8
+// #define PWM1_Freq  12000
+// #define PWM2_Res   8
+// #define PWM2_Freq  5000
+// int PWM1_DutyCycle = 0;
+// int PWM2_DutyCycle = 0;
+// void setup() 
+// {
+//   ledcAttachPin(LED_GPIO, PWM1_Ch);
+//   ledcAttachPin(LED2_GPIO, PWM2_Ch);
+//   ledcAttachPin(LED3_GPIO, PWM3_Ch);
+//   ledcSetup(PWM1_Ch, PWM1_Freq, PWM1_Res);
+//   ledcSetup(PWM2_Ch, PWM1_Freq, PWM1_Res);
+//   ledcSetup(PWM3_Ch, PWM2_Freq, PWM2_Res);
+//   Serial.begin(9600);
+// }
+// void loop() 
+// {
+//   int potValue = analogRead(POT_GPIO);
+//   PWM1_DutyCycle = map(potValue, 0, 4095, 0, 60);
+
+//   Serial.println(PWM1_DutyCycle);
+//   ledcWrite(PWM1_Ch, PWM1_DutyCycle);
+//   ledcWrite(PWM2_Ch, 17);
+//   ledcWrite(PWM3_Ch, 245);
+//   vTaskDelay(10);
+// }
