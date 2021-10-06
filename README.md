@@ -1,2 +1,2 @@
-# CarDaylightsAndPioneerRemoteControl_ESP32_PlatformIO_v2
+# CarDaylightsAndPioneerRemoteControlForFord_ESP32_PlatformIO_v3
 ESP32 variant
